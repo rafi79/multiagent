@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+ENV/
+.DS_Store
+.streamlit/
+.idea/
+*.csv
+!data/example_garages.csv
