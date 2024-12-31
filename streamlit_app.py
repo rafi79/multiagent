@@ -3,15 +3,15 @@ import pandas as pd
 import google.generativeai as genai
 from openai import OpenAI
 import requests
-import json
+import os
 from typing import Dict, List, Optional
-from PIL import Image
 
-# API Keys
-OPENAI_API_KEY = "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"
-GEMINI_API_KEY = "AIzaSyCcMZPrzP5me7Rl4pmAc1Nn5vUDSan5Q6E"
-PERPLEXITY_API_KEY = "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"
-GROQ_API_KEY = "groq-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"
+# Configure page
+st.set_page_config(page_title="Auto Service Assistant", layout="wide")
+
+# Initialize session state
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = False
 
 class GarageDataManager:
     def __init__(self):
@@ -30,14 +30,12 @@ class GarageDataManager:
         if self.data is None:
             return
 
-        # Clean string columns
         string_columns = ['GarageName', 'Location', 'City', 'Postcode', 
                          'Phone', 'Email', 'Website']
         for col in string_columns:
             if col in self.data.columns:
                 self.data[col] = self.data[col].astype(str).str.strip()
 
-        # Standardize postcode
         if 'Postcode' in self.data.columns:
             self.data['Postcode'] = self.data['Postcode'].str.upper()
 
@@ -56,14 +54,32 @@ class GarageDataManager:
 
 class AIServices:
     def __init__(self):
-        # Initialize OpenAI
-        self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        # Initialize Gemini
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.gemini = genai.GenerativeModel('gemini-pro')
+        # Store API clients
+        self.openai_client = None
+        self.gemini = None
+        self.initialize_apis()
 
-    def generate_image(self, prompt: str) -> str:
+    def initialize_apis(self):
+        # Initialize OpenAI
+        try:
+            self.openai_client = OpenAI(
+                api_key="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"
+            )
+        except Exception as e:
+            st.warning("OpenAI service not available")
+
+        # Initialize Gemini
+        try:
+            genai.configure(api_key="AIzaSyCcMZPrzP5me7Rl4pmAc1Nn5vUDSan5Q6E")
+            self.gemini = genai.GenerativeModel('gemini-pro')
+        except Exception as e:
+            st.warning("Gemini service not available")
+
+    def generate_image(self, prompt: str) -> Optional[str]:
+        if not self.openai_client:
+            st.warning("Image generation not available")
+            return None
+            
         try:
             response = self.openai_client.images.generate(
                 model="dall-e-3",
@@ -77,7 +93,11 @@ class AIServices:
             st.error(f"Image generation error: {str(e)}")
             return None
 
-    def get_expert_advice(self, query: str) -> str:
+    def get_expert_advice(self, query: str) -> Optional[str]:
+        if not self.openai_client:
+            st.warning("Expert advice not available")
+            return None
+            
         try:
             response = self.openai_client.chat.completions.create(
                 model="gpt-4",
@@ -91,21 +111,21 @@ class AIServices:
             st.error(f"Expert advice error: {str(e)}")
             return None
 
-    def research_with_perplexity(self, query: str) -> str:
-        headers = {
-            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        payload = {
-            "model": "llama-3.1-sonar-small-128k-online",
-            "messages": [
-                {"role": "system", "content": "Research automotive topics."},
-                {"role": "user", "content": query}
-            ]
-        }
-
+    def research_with_perplexity(self, query: str) -> Optional[str]:
         try:
+            headers = {
+                "Authorization": f"Bearer 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",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "model": "llama-3.1-sonar-small-128k-online",
+                "messages": [
+                    {"role": "system", "content": "Research automotive topics."},
+                    {"role": "user", "content": query}
+                ]
+            }
+
             response = requests.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers=headers,
@@ -117,24 +137,17 @@ class AIServices:
             st.error(f"Research error: {str(e)}")
             return None
 
-    def analyze_with_gemini(self, query: str) -> str:
-        try:
-            response = self.gemini.generate_content(query)
-            return response.text
-        except Exception as e:
-            st.error(f"Gemini analysis error: {str(e)}")
-            return None
+def initialize_session():
+    if not st.session_state.initialized:
+        st.session_state.garage_manager = GarageDataManager()
+        st.session_state.ai_services = AIServices()
+        st.session_state.initialized = True
 
 def main():
-    st.set_page_config(page_title="Auto Service Assistant", layout="wide")
-    
-    # Initialize services
-    if 'ai_services' not in st.session_state:
-        st.session_state.ai_services = AIServices()
-    if 'garage_manager' not in st.session_state:
-        st.session_state.garage_manager = GarageDataManager()
-
     st.title("🚗 Automotive Service Assistant")
+    
+    # Initialize session
+    initialize_session()
 
     # Sidebar
     with st.sidebar:
@@ -222,11 +235,6 @@ def main():
                 )
                 if advice:
                     st.write(advice)
-                    
-                    # Show relevant garages if data is loaded
-                    if hasattr(st.session_state.garage_manager, 'data'):
-                        st.subheader("Nearby Garages")
-                        # Add garage recommendations based on the issue
 
 if __name__ == "__main__":
     main()
