@@ -7,20 +7,17 @@ import json
 import io
 import base64
 from datetime import datetime
-import asyncio
-import aiohttp
 from typing import Dict, List, Optional, Union
 from PIL import Image
 
-# API Configuration
-GROQ_API_KEY = "groq-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"
-GEMINI_API_KEY = "AIzaSyCcMZPrzP5me7Rl4pmAc1Nn5vUDSan5Q6E"
-OPENAI_API_KEY = "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"
-PERPLEXITY_API_KEY = "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"
+# Set page config
+st.set_page_config(page_title="Automotive Multi-Agent System", layout="wide")
+
+# Initialize session state
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = False
 
 class GarageDataManager:
-    """Manages garage data from CSV"""
-    
     def __init__(self):
         self.data = None
         
@@ -63,23 +60,28 @@ class GarageDataManager:
         return pd.DataFrame()
 
 class MultiAgentSystem:
-    """Coordinates different AI agents"""
-    
     def __init__(self):
         # Initialize Gemini
-        genai.configure(api_key=GEMINI_API_KEY)
-        self.gemini = genai.GenerativeModel('gemini-pro')
-        
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            self.gemini = genai.GenerativeModel('gemini-pro')
+        except Exception as e:
+            st.warning("Gemini API not configured")
+            self.gemini = None
+
         # Initialize OpenAI
-        self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        try:
+            self.openai_client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        except Exception as e:
+            st.warning("OpenAI API not configured")
+            self.openai_client = None
+
+        # Perplexity Setup
+        self.perplexity_key = st.secrets.get("PERPLEXITY_API_KEY")
         
-        # Initialize session for API calls
-        self.session = aiohttp.ClientSession()
-        
-    async def close(self):
-        await self.session.close()
-        
-    async def analyze_with_gemini(self, query: str) -> str:
+    def analyze_with_gemini(self, query: str) -> str:
+        if not self.gemini:
+            return "Gemini API not configured"
         try:
             response = self.gemini.generate_content(query)
             return response.text
@@ -87,9 +89,11 @@ class MultiAgentSystem:
             st.error(f"Gemini API error: {str(e)}")
             return None
             
-    async def generate_image_with_dalle(self, prompt: str) -> str:
+    def generate_image_with_dalle(self, prompt: str) -> str:
+        if not self.openai_client:
+            return "OpenAI API not configured"
         try:
-            response = await self.openai_client.images.generate(
+            response = self.openai_client.images.generate(
                 model="dall-e-3",
                 prompt=prompt,
                 size="1024x1024",
@@ -101,9 +105,11 @@ class MultiAgentSystem:
             st.error(f"DALL-E API error: {str(e)}")
             return None
             
-    async def reason_with_o1(self, query: str) -> str:
+    def reason_with_o1(self, query: str) -> str:
+        if not self.openai_client:
+            return "OpenAI API not configured"
         try:
-            response = await self.openai_client.chat.completions.create(
+            response = self.openai_client.chat.completions.create(
                 model="o1-mini",
                 messages=[
                     {"role": "system", "content": "You are an automotive expert."},
@@ -115,9 +121,12 @@ class MultiAgentSystem:
             st.error(f"O1 API error: {str(e)}")
             return None
             
-    async def research_with_perplexity(self, query: str) -> str:
+    def research_with_perplexity(self, query: str) -> str:
+        if not self.perplexity_key:
+            return "Perplexity API not configured"
+            
         headers = {
-            "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
+            "Authorization": f"Bearer {self.perplexity_key}",
             "Content-Type": "application/json"
         }
         
@@ -130,52 +139,45 @@ class MultiAgentSystem:
         }
         
         try:
-            async with self.session.post(
+            response = requests.post(
                 "https://api.perplexity.ai/chat/completions",
                 headers=headers,
                 json=payload
-            ) as response:
-                result = await response.json()
-                return result['choices'][0]['message']['content']
+            )
+            result = response.json()
+            return result['choices'][0]['message']['content']
         except Exception as e:
             st.error(f"Perplexity API error: {str(e)}")
             return None
 
-def create_data_management_section():
-    st.sidebar.header("Data Management")
-    
-    if 'garage_manager' not in st.session_state:
-        st.session_state.garage_manager = GarageDataManager()
-        
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload Garage CSV",
-        type=['csv']
-    )
-    
-    if uploaded_file is not None:
-        data = st.session_state.garage_manager.load_csv(uploaded_file)
-        if data is not None:
-            st.sidebar.success(f"Loaded {len(data)} records")
-            return True
-    return False
+def initialize_system():
+    if not st.session_state.initialized:
+        try:
+            st.session_state.garage_manager = GarageDataManager()
+            st.session_state.agent_system = MultiAgentSystem()
+            st.session_state.initialized = True
+        except Exception as e:
+            st.error(f"Error initializing system: {str(e)}")
 
-async def main():
-    st.set_page_config(page_title="Automotive Multi-Agent System", layout="wide")
-    
-    # Initialize multi-agent system
-    if 'agent_system' not in st.session_state:
-        st.session_state.agent_system = MultiAgentSystem()
-    
+def main():
     st.title("🚗 Automotive Multi-Agent System")
     
-    # Data management
-    data_loaded = create_data_management_section()
+    # Initialize system
+    initialize_system()
     
     # Sidebar - Vehicle Info
-    st.sidebar.header("Vehicle Information")
-    make = st.sidebar.text_input("Make")
-    model = st.sidebar.text_input("Model")
-    year = st.sidebar.number_input("Year", min_value=1900, max_value=2024)
+    with st.sidebar:
+        st.header("Vehicle Information")
+        make = st.text_input("Make")
+        model = st.text_input("Model")
+        year = st.number_input("Year", min_value=1900, max_value=2024)
+        
+        st.header("Data Management")
+        uploaded_file = st.file_uploader("Upload Garage CSV", type=['csv'])
+        if uploaded_file is not None:
+            data = st.session_state.garage_manager.load_csv(uploaded_file)
+            if data is not None:
+                st.success(f"Loaded {len(data)} records")
     
     # Main tabs
     tabs = st.tabs([
@@ -187,21 +189,15 @@ async def main():
     
     with tabs[0]:
         st.header("🔍 Find Garages")
-        if data_loaded:
+        if hasattr(st.session_state.garage_manager, 'data') and st.session_state.garage_manager.data is not None:
             col1, col2 = st.columns([2, 1])
             with col1:
                 search_query = st.text_input("Search")
             with col2:
-                search_by = st.selectbox(
-                    "Search By",
-                    ["City", "Postcode", "Name"]
-                )
+                search_by = st.selectbox("Search By", ["City", "Postcode", "Name"])
             
             if search_query:
-                results = st.session_state.garage_manager.search_garages(
-                    search_query, search_by
-                )
-                
+                results = st.session_state.garage_manager.search_garages(search_query, search_by)
                 if not results.empty:
                     st.write(f"Found {len(results)} matches:")
                     for _, garage in results.iterrows():
@@ -225,9 +221,8 @@ async def main():
         
         if st.button("Research"):
             with st.spinner("Researching..."):
-                research_result = await st.session_state.agent_system.research_with_perplexity(
-                    f"Research automotive part/service: {research_query} "
-                    f"for {year} {make} {model}"
+                research_result = st.session_state.agent_system.research_with_perplexity(
+                    f"Research automotive part/service: {research_query} for {year} {make} {model}"
                 )
                 if research_result:
                     st.write(research_result)
@@ -243,7 +238,7 @@ async def main():
         
         if st.button("Generate Design"):
             with st.spinner("Creating design..."):
-                image_url = await st.session_state.agent_system.generate_image_with_dalle(
+                image_url = st.session_state.agent_system.generate_image_with_dalle(
                     f"Professional automotive {design_type.lower()} design: {design_desc}"
                 )
                 if image_url:
@@ -261,16 +256,12 @@ async def main():
         
         if st.button("Get Advice"):
             with st.spinner("Analyzing..."):
-                advice = await st.session_state.agent_system.reason_with_o1(
+                advice = st.session_state.agent_system.reason_with_o1(
                     f"Provide expert advice for this automotive issue: {issue} "
                     f"Vehicle: {year} {make} {model}"
                 )
                 if advice:
                     st.write(advice)
-                    
-                    if data_loaded:
-                        st.subheader("Recommended Garages")
-                        # Add garage recommendations based on the issue
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
