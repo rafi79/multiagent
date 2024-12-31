@@ -9,12 +9,13 @@ import re
 # Initialize session state
 if "initialized" not in st.session_state:
     st.session_state.initialized = False
+if "garage_data" not in st.session_state:
     st.session_state.garage_data = None
+if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 class IntentClassifier:
     """Classifies user intent to route to appropriate agent"""
-    
     def __init__(self):
         self.intent_patterns = {
             "location": r"(where|location|find|near|closest|map)",
@@ -32,52 +33,29 @@ class IntentClassifier:
                 intents.append(intent)
         return intents or ["general"]
 
-class AutoServiceAgent:
-    def __init__(self):
-        # Initialize API clients
-        self.openai = OpenAI(api_key="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")
-        genai.configure(api_key="AIzaSyCcMZPrzP5me7Rl4pmAc1Nn5vUDSan5Q6E")
-        self.gemini = genai.GenerativeModel('gemini-pro')
-        self.intent_classifier = IntentClassifier()
-        
-    def process_query(self, query: str, garage_data: pd.DataFrame) -> Dict:
-        """Process user query and route to appropriate agent"""
-        intents = self.intent_classifier.classify_intent(query)
-        response = {"message": "", "garages": [], "visualizations": None}
-        
-        for intent in intents:
-            if intent == "location":
-                location_info = self._process_location(query, garage_data)
-                response["message"] += f"\n\n{location_info['message']}"
-                response["garages"].extend(location_info["garages"])
-                
-            elif intent == "paint":
-                paint_info = self._process_paint(query, garage_data)
-                response["message"] += f"\n\n{paint_info['message']}"
-                response["garages"].extend(paint_info["garages"])
-                
-            elif intent == "parts":
-                parts_info = self._process_parts(query)
-                response["message"] += f"\n\n{parts_info['message']}"
-                response["visualizations"] = parts_info.get("image_url")
-                
-            elif intent == "research":
-                research_info = self._process_research(query, garage_data)
-                response["message"] += f"\n\n{research_info['message']}"
-                response["garages"].extend(research_info["garages"])
-                
-        return response
+class ServiceHandler:
+    """Handles different service requests"""
     
-    def _process_location(self, query: str, garage_data: pd.DataFrame) -> Dict:
-        """Use Gemini for location-based queries"""
+    def __init__(self):
+        # Initialize APIs
         try:
-            # Extract location from query
-            response = self.gemini.generate_content(
-                f"Extract the city or location from: {query}"
-            )
+            genai.configure(api_key="AIzaSyCcMZPrzP5me7Rl4pmAc1Nn5vUDSan5Q6E")
+            self.gemini = genai.GenerativeModel('gemini-pro')
+        except Exception as e:
+            st.warning("Gemini API initialization failed")
+            self.gemini = None
+            
+    def process_location_query(self, query: str, garage_data: pd.DataFrame) -> Dict:
+        """Process location-based queries"""
+        try:
+            if not self.gemini:
+                return {"message": "Location service unavailable", "garages": []}
+                
+            # Extract location
+            response = self.gemini.generate_content(f"Extract the city name from: {query}")
             location = response.text.strip()
             
-            # Filter garages by location
+            # Filter garages
             relevant_garages = garage_data[
                 garage_data['City'].str.lower().str.contains(location.lower())
             ]
@@ -87,24 +65,20 @@ class AutoServiceAgent:
                 "garages": relevant_garages.to_dict('records')
             }
         except Exception as e:
-            st.error(f"Location processing error: {str(e)}")
-            return {"message": "Error processing location", "garages": []}
-            
-    def _process_paint(self, query: str, garage_data: pd.DataFrame) -> Dict:
-        """Use Perplexity to research paint services"""
+            return {"message": f"Error processing location: {str(e)}", "garages": []}
+    
+    def process_paint_query(self, query: str, garage_data: pd.DataFrame) -> Dict:
+        """Process paint service queries using Perplexity"""
         try:
             headers = {
-                "Authorization": f"Bearer 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",
+                "Authorization": "Bearer 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",
                 "Content-Type": "application/json"
             }
             
             payload = {
                 "model": "llama-3.1-sonar-small-128k-online",
                 "messages": [
-                    {
-                        "role": "user",
-                        "content": f"Research car painting services for: {query}"
-                    }
+                    {"role": "user", "content": f"Research car painting services for: {query}"}
                 ]
             }
             
@@ -112,118 +86,81 @@ class AutoServiceAgent:
                 "https://api.perplexity.ai/chat/completions",
                 headers=headers,
                 json=payload
-            ).json()
-            
-            analysis = response['choices'][0]['message']['content']
-            
-            # Filter garages based on analysis
-            relevant_garages = garage_data[
-                garage_data['GarageName'].str.lower().str.contains('paint|body|finish', regex=True)
-            ]
-            
-            return {
-                "message": f"Paint Service Analysis:\n{analysis}",
-                "garages": relevant_garages.to_dict('records')
-            }
-        except Exception as e:
-            st.error(f"Paint research error: {str(e)}")
-            return {"message": "Error researching paint services", "garages": []}
-            
-    def _process_parts(self, query: str) -> Dict:
-        """Use DALL-E for parts visualization"""
-        try:
-            # Generate part visualization
-            response = self.openai.images.generate(
-                model="dall-e-3",
-                prompt=f"Professional automotive visualization: {query}",
-                size="1024x1024",
-                quality="standard",
-                n=1
             )
             
-            return {
-                "message": "Generated visualization of the requested part:",
-                "image_url": response.data[0].url
-            }
-        except Exception as e:
-            st.error(f"Parts visualization error: {str(e)}")
-            return {"message": "Error generating part visualization"}
-            
-    def _process_research(self, query: str, garage_data: pd.DataFrame) -> Dict:
-        """Use O1-mini for garage recommendations"""
-        try:
-            # Get analysis from O1-mini
-            response = self.openai.chat.completions.create(
-                model="o1-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an automotive expert helping recommend garages."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Analyze this request and recommend garage criteria: {query}"
-                    }
+            if response.status_code == 200:
+                result = response.json()
+                analysis = result['choices'][0]['message']['content']
+                
+                # Filter garages
+                relevant_garages = garage_data[
+                    garage_data['GarageName'].str.lower().str.contains('paint|body|finish', regex=True)
                 ]
-            )
-            
-            analysis = response.choices[0].message.content
-            
-            # Filter garages based on analysis
-            # This is a simple filter - you can make it more sophisticated
-            relevant_garages = garage_data.head(3)  # Placeholder
-            
-            return {
-                "message": f"Expert Analysis:\n{analysis}",
-                "garages": relevant_garages.to_dict('records')
-            }
+                
+                return {
+                    "message": f"Paint Service Analysis:\n{analysis}",
+                    "garages": relevant_garages.to_dict('records')
+                }
+            else:
+                return {"message": "Error getting paint service information", "garages": []}
+                
         except Exception as e:
-            st.error(f"Research error: {str(e)}")
-            return {"message": "Error analyzing request", "garages": []}
+            return {"message": f"Error researching paint services: {str(e)}", "garages": []}
 
-def send_email_to_garage(garage: dict, user_query: str, user_contact: dict):
-    """Send email using Groq/Mixtral"""
-    try:
-        llm = ChatGroq(
-            model="mixtral-8x7b-32768",
-            api_key="groq-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"
-        )
+class QueryProcessor:
+    """Processes user queries and coordinates responses"""
+    
+    def __init__(self):
+        self.intent_classifier = IntentClassifier()
+        self.service_handler = ServiceHandler()
         
-        tool_set = CompostoToolSet()
-        tools = tool_set.get_tools(App.Gmail)
+    def process_query(self, query: str, garage_data: pd.DataFrame) -> Dict:
+        """Process user query and return appropriate response"""
+        intents = self.intent_classifier.classify_intent(query)
+        response = {"message": "", "garages": [], "visualizations": None}
         
-        user_prompt = f"""
-        Send an email to {garage['Email']}
-        Subject: Service Inquiry
-        
-        Query: {user_query}
-        
-        Contact Information:
-        Name: {user_contact['name']}
-        Email: {user_contact['email']}
-        Phone: {user_contact['phone']}
-        """
-        
-        response = agent_executor.invoke(
-            llm=llm,
-            user_prompt=user_prompt,
-            tools=tools
-        )
-        
-        return True
-    except Exception as e:
-        st.error(f"Email error: {str(e)}")
-        return False
+        for intent in intents:
+            if intent == "location":
+                location_info = self.service_handler.process_location_query(query, garage_data)
+                response["message"] += f"\n\n{location_info['message']}"
+                response["garages"].extend(location_info["garages"])
+                
+            elif intent == "paint":
+                paint_info = self.service_handler.process_paint_query(query, garage_data)
+                response["message"] += f"\n\n{paint_info['message']}"
+                response["garages"].extend(paint_info["garages"])
+                
+        return response
+
+def create_email_content(garage: dict, query: str, user_info: dict) -> str:
+    """Create email content for garage communication"""
+    return f"""
+    Subject: Service Inquiry
+    
+    Dear {garage['GarageName']},
+    
+    I am writing to inquire about your services.
+    
+    Query: {query}
+    
+    Contact Information:
+    Name: {user_info.get('name', 'Not provided')}
+    Email: {user_info.get('email', 'Not provided')}
+    Phone: {user_info.get('phone', 'Not provided')}
+    
+    Best regards,
+    {user_info.get('name', 'A potential customer')}
+    """
 
 def main():
     st.title("🚗 Auto Service Assistant")
     
-    # Initialize agent if not already done
+    # Initialize processor if not already done
     if not st.session_state.initialized:
-        st.session_state.agent = AutoServiceAgent()
+        st.session_state.processor = QueryProcessor()
         st.session_state.initialized = True
     
-    # Sidebar for data upload
+    # Sidebar for data upload and user info
     with st.sidebar:
         uploaded_file = st.file_uploader("Upload Garage CSV", type=['csv'])
         if uploaded_file is not None:
@@ -232,7 +169,7 @@ def main():
             
         # Contact information
         st.header("Your Contact Info")
-        user_contact = {
+        user_info = {
             "name": st.text_input("Your Name"),
             "email": st.text_input("Your Email"),
             "phone": st.text_input("Your Phone")
@@ -251,29 +188,36 @@ def main():
                         st.write(f"**Location:** {garage['Location']}")
                         st.write(f"**Contact:** {garage['Phone']}")
                         st.write(f"**Email:** {garage['Email']}")
-                        if user_contact["email"]:
+                        
+                        if user_info["email"]:
+                            email_content = create_email_content(
+                                garage, 
+                                message["content"], 
+                                user_info
+                            )
                             if st.button(f"Contact {garage['GarageName']}", key=garage['Email']):
-                                if send_email_to_garage(garage, message["content"], user_contact):
-                                    st.success("Email sent!")
-            if message.get("image_url"):
-                st.image(message["image_url"])
+                                st.info("Email content preview:")
+                                st.text(email_content)
     
     # Chat input
     if query := st.chat_input("Ask about services, locations, or specific needs..."):
         # Add user message to chat history
         st.session_state.chat_history.append({"role": "user", "content": query})
         
-        # Process query and get response
+        # Process query
         if st.session_state.garage_data is not None:
-            response = st.session_state.agent.process_query(query, st.session_state.garage_data)
-            
-            # Add assistant response to chat history
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": response["message"],
-                "garages": response["garages"],
-                "image_url": response.get("visualizations")
-            })
+            with st.spinner("Processing your request..."):
+                response = st.session_state.processor.process_query(
+                    query, 
+                    st.session_state.garage_data
+                )
+                
+                # Add assistant response to chat history
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": response["message"],
+                    "garages": response["garages"]
+                })
             
             # Force refresh
             st.rerun()
