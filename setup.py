@@ -1,5 +1,4 @@
 from setuptools import setup, find_packages
-!pip install google-generativeai
 
 setup(
     name="auto-service-assistant",
